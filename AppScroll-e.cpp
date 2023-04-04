@@ -237,3 +237,184 @@ int AppScroll(HWND hWnd)
 	HwClose();
 	return 0;
 }
+
+WORD smbusAddress(){
+		DWORD64 qwFAddr = PCI_CONFIG_START | (31 << 15) | (3 << 12);
+		PSMBUS_PCI_CFG pciConfig = PSMBUS_PCI_CFG(qwFAddr);
+		WORD toReturn = LOWORD( _inmdw((DWORD_PTR) &pciConfig->SMB_BASE) & (~1));
+		return toReturn;
+}
+
+int receiveByte(WORD baseAddress, BYTE deviceAddress )
+{
+	while ((__inp(baseAddress + SMB_HST_STS) & HST_STS_HOST_BUSY) != 0);
+
+	__outp(baseAddress  + SMB_XMIT_SLVA, ((deviceAddress << 1) | 0x01));
+
+	__outp(baseAddress + SMB_HST_CNT, SMB_SEND_REC_BYTE | HST_CNT_START);
+
+	int flag = 1;
+	int count = 10000;
+	while ((count--)>0) 
+	{
+		BYTE hsr = __inp(baseAddress + SMB_HST_STS);
+		if ((hsr & (HST_STS_INTR)) != 0)
+		{
+			flag = 0;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			break;
+		}
+
+		if ((hsr & (HST_STS_FAILED | HST_STS_BUS_ERR | HST_STS_DEV_ERR)) != 0)
+		{
+			flag = 2;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			break;
+		}
+	}
+
+	return flag;
+}
+
+int readByte(WORD baseAddress, BYTE deviceAddress, BYTE command) 
+{
+	while ((__inp(baseAddress + SMB_HST_STS) & HST_STS_HOST_BUSY) != 0);
+
+	__outp(baseAddress + SMB_XMIT_SLVA, ((deviceAddress << 1) | 0x01));
+
+	__outp(baseAddress + SMB_HST_CNT, SMB_WR_RD_BYTE | HST_CNT_START);
+
+	__outp(baseAddress + SMB_HST_CMD, command);
+
+	int flag = 1;
+
+	while (1) 
+	{
+		BYTE hsr = __inp(baseAddress + SMB_HST_STS);
+		if ((hsr & (HST_STS_INTR)) != 0)
+		{
+			flag = 0;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			break;
+		}
+
+		if ((hsr & (HST_STS_FAILED | HST_STS_BUS_ERR | HST_STS_DEV_ERR)) != 0)
+		{
+			flag = 2;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			break;
+		}
+	}
+
+	return flag;
+}
+
+/*
+int readSPD(WORD baseAddress, BYTE deviceAddress) {
+
+	while ((__inp(baseAddress + SMB_HST_STS) & HST_STS_HOST_BUSY) != 0);
+
+	__outp(baseAddress + SMB_XMIT_SLVA, ((deviceAddress << 1) | 0x01));
+
+	__outp(baseAddress + SMB_HST_CNT, SMB_WR_RD_BYTE | HST_CNT_START);
+
+	__outp(baseAddress + SMB_HST_CMD, 0x00);
+
+	int flag = 1;
+
+	BYTE received = 0x00;
+
+	while (1) {
+		BYTE hsr = __inp(baseAddress + SMB_HST_STS);
+		if ((hsr & (HST_STS_INTR)) != 0){
+			flag = 0;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			
+
+
+			break;
+		}
+
+		if ((hsr & (HST_STS_FAILED | HST_STS_BUS_ERR | HST_STS_DEV_ERR)) != 0){
+			flag = 2;
+			__outp((baseAddress + SMB_HST_STS), __inp(baseAddress + SMB_HST_STS));
+			break;
+		}
+	}
+
+
+
+}
+*/
+
+int AppScroll(HWND hWnd)
+{
+	int   i;
+
+	char szMes0[] = "Error initializing the Hw driver";
+	char szMes1[] = "IOS Application";
+
+	// Initialize the Hw library
+	if (!HwOpen()) {
+		wsprintf(szBuffer[0], szMes0);
+		MessageBox(NULL, szBuffer[0], "HwOpen", MB_ICONSTOP);
+		return 1;
+	}
+
+	// Erase the display buffer and the window contents
+	for (i = 0; i < NLIN; i++) {
+		memset(szBuffer[i], ' ', NCOL);
+	}
+	cLine = 1;
+
+	// Copy the start message into the display buffer and display the message
+	wsprintf(szBuffer[cLine], szMes1);
+	cLine += 2;
+	DisplWindow(hWnd);
+
+	//--------------------------------------------------------------------
+	// To be completed with the application's code
+	//--------------------------------------------------------------------
+
+	wsprintf(szBuffer[cLine++], "[3.8.2] The base address of the SMBus: %x", smbusAddress());
+	DisplWindow(hWnd);
+	cLine++;
+	cLine++;
+
+	for (BYTE x = 0x10; x < 0x7F; x++) {
+		int flag = receiveByte(smbusAddress(), x);
+		char devType[1024];
+		strcpy_s(devType, "N/A");
+
+		//wsprintf(szBuffer[cLine++], "[3.8.4] Transfer initiated ... ");
+		if (flag == 0) {
+
+			//wsprintf(szBuffer[cLine++], "[3.8.4] Transfer initiated ... ");
+			if (x>0x18 && x < 0x1F){
+				strcpy_s(devType, "Thermal sensors of an SPD memory");
+			}
+			if (x>0x30 && x < 0x37){
+				strcpy_s(devType, "Write protection of an SPD memory");
+			}
+			if (x>0x40 && x < 0x47){
+				strcpy_s(devType, "Real-time clock");
+			}
+			if (x>0x50 && x < 0x57){
+				strcpy_s(devType, "SPD Memory");
+			}
+			wsprintf(szBuffer[cLine++], "The transfer completed successfully on: %x, %s", x, devType);
+		}
+		else if (flag == 1) {
+			wsprintf(szBuffer[cLine++], "The transfer timed out!");
+		}
+		else {
+			//wsprintf(szBuffer[cLine++], "The transfer encountered an error!");
+		}
+	}
+
+	// Display the messages
+	DisplWindow(hWnd);
+
+	HwClose();
+	return 0;
+}
